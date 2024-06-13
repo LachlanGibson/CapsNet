@@ -6,7 +6,7 @@ The network was initialised using PyTorch defaults and trained using the AdamW o
 
 ## Results
 
-Training the network as described above resulted in a final test prediction accuracy of 99.62% and prediction loss of about 0.01112. This result is a little worse than the reported min of 99.74%. This discrepency could be explained by any combination of the changes outlined above, but my guess is that the main cause are the changes to the augmentation.
+Training the network as described above resulted in a final test prediction accuracy of 99.54% and prediction loss of about 0.01112, a little lower than the reported min of 99.74%. This discrepency could be explained by any combination of the changes outlined above, but my guess is that the main cause are the changes to the augmentation.
 
 Here are the misclassified digits with corresponding targets and probabilities.
 
