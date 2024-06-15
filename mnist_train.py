@@ -9,14 +9,12 @@ from torchvision.transforms import RandomAffine, RandomApply, RandomRotation
 
 from model import CapsNet
 
-batch_size = 128
+batch_size = 120  # from paper GitHub code
 epochs = 300
 lr = 1e-3
-wd = 1e-5
 lr_decay = 0.98
-grad_norm_clip = 2
 aug_rot = 30
-aug_trans = 2 / 28
+aug_trans = 2 / 28  # 2px is simpler than dealing with individualised margins
 aug_erase = 4 / 28
 aug_scale = 0.75
 augment_data = True
@@ -67,7 +65,7 @@ for i, (imgs, targets) in enumerate(train_loader):
     break
 
 model = CapsNet(28, 28, 1, 10).to(device)
-optimiser = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+optimiser = torch.optim.Adam(model.parameters(), lr=lr)
 scheduler = torch.optim.lr_scheduler.ExponentialLR(optimiser, lr_decay)
 criterion = torch.nn.CrossEntropyLoss()
 print(
@@ -104,18 +102,14 @@ for epoch in range(epochs):
         loss = criterion(output, targets)
         loss.backward()
         cum_loss += loss.item()
-        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_norm_clip)
-        cum_norm += norm
         optimiser.step()
     scheduler.step()
     test_acc, test_loss = evaluate(model, test_loader)
     if log_path is not None:
         with open(log_path, "a") as f:
-            f.write(
-                f"{epoch+1},{cum_loss/len(train_loader)},{cum_norm/len(train_loader)},{test_acc},{test_loss}\n"
-            )
+            f.write(f"{epoch+1},{cum_loss/len(train_loader)},{test_acc},{test_loss}\n")
     print(
-        f"Epoch {epoch+1}/{epochs} | avg loss: {cum_loss/len(train_loader):.4f} | avg norm: {cum_norm/len(train_loader):.4f} | test acc: {test_acc:.4f}"
+        f"Epoch {epoch+1}/{epochs} | avg loss: {cum_loss/len(train_loader):.4f} | test acc: {test_acc:.4f}"
     )
     if (epoch + 1) % checkpoint_interval == 0:
         torch.save(

@@ -37,7 +37,7 @@ class Caps(nn.Module):
         stdv = num_capsules**-0.5
         self.weights.data.uniform_(-stdv, stdv)
         self.activation = nn.ReLU()
-        self.bn = nn.BatchNorm1d(num_channels)
+        self.bn = nn.BatchNorm1d(num_channels * num_classes)
 
     def forward(self, x):
         # [..., channels, height, width] -> [..., channels, width x height, 1]
@@ -46,9 +46,13 @@ class Caps(nn.Module):
         x = self.weights * x
         # [..., channels, capsules, classes] -> [..., channels, classes]
         x = x.sum(-2)
-        # batchnorm channel features (bn classes or channels*classes instead?)
+        # [..., channels, classes] -> [..., channels*classes]
+        x = x.flatten(-2)
+        # batchnorm channels*classes
         x = self.activation(self.bn(x))
-        # [..., channels, num_classes] -> [..., num_classes]
+        # [..., channels*classes] -> [..., channels, classes]
+        x = x.view(*x.shape[:-1], self.num_channels, self.num_classes)
+        # [..., channels, classes] -> [..., classes]
         branch_logits = x.sum(-2)
         return branch_logits
 
@@ -60,8 +64,7 @@ class CapsNet(nn.Module):
 
     choices made from original paper:
     1. Z-Derived Capsules
-    2. BatchNorm1d on channel features (classes or channels*classes instead?)
-    3. Merge branch_logits with sum rather than learnable weights
+    2. Merge branch_logits with sum rather than learnable weights
     """
 
     def __init__(self, w, h, c, num_classes, kernel_size=3):

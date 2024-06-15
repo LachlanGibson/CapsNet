@@ -27,7 +27,7 @@ def read_csv(file_path, col_names):
 
 log_path = "./checkpoints_augmented/log.csv"
 fig_path = "./figures"
-col_names = ["epoch", "avg_loss", "avg_norm", "test_acc", "test_loss"]
+col_names = ["epoch", "avg_loss", "test_acc", "test_loss"]
 
 data = read_csv(log_path, col_names)
 test_error_rate = [1 - acc for acc in data["test_acc"]]
@@ -68,7 +68,7 @@ model.eval()
 test_data = datasets.MNIST(
     root="", train=False, download=True, transform=transforms.ToTensor()
 )
-test_loader = DataLoader(test_data, batch_size=64, shuffle=False)
+test_loader = DataLoader(test_data, batch_size=120, shuffle=False)
 
 
 # find misclassified images
