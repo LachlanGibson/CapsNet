@@ -12,7 +12,7 @@ class Conv(nn.Module):
                 nn.Sequential(
                     nn.Conv2d(channels[i], channels[i + 1], kernel_size, bias=False),
                     nn.BatchNorm2d(channels[i + 1]),
-                    nn.LeakyReLU(),
+                    nn.ReLU(),
                 )
                 for i in range(len(channels) - 1)
             ]
@@ -25,20 +25,27 @@ class Conv(nn.Module):
 
 
 class Caps(nn.Module):
-    def __init__(self, num_capsules, num_channels, num_classes):
+    def __init__(self, num_channels, num_capsules, num_classes):
         super().__init__()
         self.num_capsules = num_capsules  # num_capsules = width x height
         self.num_channels = num_channels
         self.num_classes = num_classes
-        self.linear = nn.Linear(num_capsules, num_classes, bias=False)
-        self.activation = nn.LeakyReLU()
+        self.weights = nn.Parameter(
+            data=torch.Tensor(num_channels, num_capsules, num_classes),
+            requires_grad=True,
+        )
+        stdv = num_capsules**-0.5
+        self.weights.data.uniform_(-stdv, stdv)
+        self.activation = nn.ReLU()
         self.bn = nn.BatchNorm1d(num_channels)
 
     def forward(self, x):
-        # [..., channels, height, width] -> [..., channels, width x height]
-        x = x.flatten(-2)
-        # [..., channels, width x height] -> [..., channels, num_classes]
-        x = self.linear(x)
+        # [..., channels, height, width] -> [..., channels, width x height, 1]
+        x = x.flatten(-2).unsqueeze(-1)
+        # [..., channels, capsules, 1] -> [..., channels, capsules, classes]
+        x = self.weights * x
+        # [..., channels, capsules, classes] -> [..., channels, classes]
+        x = x.sum(-2)
         # batchnorm channel features (bn classes or channels*classes instead?)
         x = self.activation(self.bn(x))
         # [..., channels, num_classes] -> [..., num_classes]
@@ -51,11 +58,10 @@ class CapsNet(nn.Module):
     by Adam Byerly, Tatiana Kalganova, Ian Dear
     https://arxiv.org/abs/2001.09136
 
-    choices/changes made from original paper:
-    1. ReLU -> LeakyReLU
-    2. Z-Derived Capsules
-    3. BatchNorm1d on channel features (classes or channels*classes instead?)
-    4. Merge branch_logits with sum rather than learnable weights
+    choices made from original paper:
+    1. Z-Derived Capsules
+    2. BatchNorm1d on channel features (classes or channels*classes instead?)
+    3. Merge branch_logits with sum rather than learnable weights
     """
 
     def __init__(self, w, h, c, num_classes, kernel_size=3):
@@ -74,7 +80,7 @@ class CapsNet(nn.Module):
             w, h = w - gap, h - gap
             n_caps.append(w * h)
         self.caps = nn.ModuleList(
-            [Caps(nc, c.channels[-1], num_classes) for c, nc in zip(self.convs, n_caps)]
+            [Caps(c.channels[-1], nc, num_classes) for c, nc in zip(self.convs, n_caps)]
         )
 
     def forward(self, x):

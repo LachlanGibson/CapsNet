@@ -14,6 +14,7 @@ epochs = 300
 lr = 1e-3
 wd = 1e-5
 lr_decay = 0.98
+grad_norm_clip = 2
 aug_rot = 30
 aug_trans = 2 / 28
 aug_erase = 4 / 28
@@ -60,7 +61,8 @@ for i, (imgs, targets) in enumerate(train_loader):
         plt.imshow(imgs[j].squeeze().numpy(), cmap="gray")
         plt.title(targets[j].item())
         plt.axis("off")
-    plt.savefig("augmented.png")
+    plt.savefig("./figures/augmented.svg", bbox_inches="tight")
+    plt.savefig("./figures/augmented.png", bbox_inches="tight")
     plt.close()
     break
 
@@ -102,7 +104,7 @@ for epoch in range(epochs):
         loss = criterion(output, targets)
         loss.backward()
         cum_loss += loss.item()
-        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_norm_clip)
         cum_norm += norm
         optimiser.step()
     scheduler.step()
