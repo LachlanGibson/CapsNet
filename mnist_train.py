@@ -11,7 +11,7 @@ from model import CapsNet
 
 batch_size = 120  # from paper GitHub code
 epochs = 300
-lr = 1e-3
+adam_params = {"lr": 0.001, "betas": (0.9, 0.999), "eps": 1e-7, "weight_decay": 0}
 lr_decay = 0.98
 aug_rot = 30
 aug_trans = 2 / 28  # 2px is simpler than dealing with individualised margins
@@ -21,6 +21,11 @@ augment_data = True
 checkpoint_path = "checkpoints_augmented"
 log_path = os.path.join(checkpoint_path, "log.csv")
 checkpoint_interval = 50
+seed = 7164
+
+torch.manual_seed(seed)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(seed)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -47,11 +52,6 @@ test_data = datasets.MNIST(
 train_loader = DataLoader(training_data, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
 
-torch.manual_seed(7164)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed(7164)
-
-
 for i, (imgs, targets) in enumerate(train_loader):
     plt.figure(figsize=(10, 10))
     for j in range(25):
@@ -65,7 +65,7 @@ for i, (imgs, targets) in enumerate(train_loader):
     break
 
 model = CapsNet(28, 28, 1, 10).to(device)
-optimiser = torch.optim.Adam(model.parameters(), lr=lr)
+optimiser = torch.optim.Adam(model.parameters(), **adam_params)
 scheduler = torch.optim.lr_scheduler.ExponentialLR(optimiser, lr_decay)
 criterion = torch.nn.CrossEntropyLoss()
 print(

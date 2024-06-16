@@ -11,8 +11,8 @@ class Conv(nn.Module):
             [
                 nn.Sequential(
                     nn.Conv2d(channels[i], channels[i + 1], kernel_size, bias=False),
-                    nn.BatchNorm2d(channels[i + 1]),
-                    nn.ReLU(),
+                    nn.BatchNorm2d(channels[i + 1], eps=0.001, momentum=0.0003),
+                    nn.ReLU(inplace=True),
                 )
                 for i in range(len(channels) - 1)
             ]
@@ -37,7 +37,7 @@ class Caps(nn.Module):
         stdv = num_capsules**-0.5
         self.weights.data.uniform_(-stdv, stdv)
         self.activation = nn.ReLU()
-        self.bn = nn.BatchNorm1d(num_channels * num_classes)
+        self.bn = nn.BatchNorm1d(num_channels * num_classes, eps=0.001, momentum=0.0003)
 
     def forward(self, x):
         # [..., channels, height, width] -> [..., channels, width x height, 1]
@@ -60,7 +60,7 @@ class Caps(nn.Module):
 class CapsNet(nn.Module):
     """Reproduction of net architecture from "No Routing Needed Between Capsules"
     by Adam Byerly, Tatiana Kalganova, Ian Dear
-    https://arxiv.org/abs/2001.09136
+    https://doi.org/10.48550/arXiv.2001.09136
 
     choices made from original paper:
     1. Z-Derived Capsules
