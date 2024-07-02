@@ -1,99 +1,85 @@
 import os
+import shutil
 
-import matplotlib.pyplot as plt
 import torch
-import torchvision.transforms as transforms
+from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from torch.utils.data import DataLoader
 from torchvision import datasets
-from torchvision.transforms import RandomAffine, RandomApply, RandomRotation
+from torchvision.transforms import ToTensor
 
-from model import CapsNet
+from augmentation import compose_transforms
+from config import *
+from model import HVCapsNet
 
-batch_size = 120  # from paper GitHub code
-epochs = 300
-adam_params = {"lr": 0.001, "betas": (0.9, 0.999), "eps": 1e-7, "weight_decay": 0}
-lr_decay = 0.98
-aug_rot = 30
-aug_trans = 2 / 28  # 2px is simpler than dealing with individualised margins
-aug_erase = 4 / 28
-aug_scale = 0.75
-augment_data = True
-checkpoint_path = "checkpoints_augmented"
-log_path = os.path.join(checkpoint_path, "log.csv")
-checkpoint_interval = 50
-seed = 7164
+# create experiment directory and copy over config
+if os.path.exists(experiment_path):
+    raise FileExistsError("experiment path already exists")
+os.makedirs(experiment_path)
+shutil.copy("config.py", os.path.join(experiment_path, "config.py"))
 
+# set seed
 torch.manual_seed(seed)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(seed)
 
+# derived variables
+log_path = os.path.join(experiment_path, "log.csv")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-if augment_data:
-    transform = transforms.Compose(
-        [
-            RandomApply([RandomRotation(aug_rot)], p=0.5),
-            RandomApply([RandomAffine(0, translate=(aug_trans, 0))], p=0.5),
-            RandomApply([RandomAffine(0, translate=(0, aug_trans))], p=0.5),
-            RandomAffine(0, scale=(aug_scale, 1)),
-            transforms.ToTensor(),
-            transforms.RandomErasing(p=1, scale=(aug_erase, aug_erase), ratio=(1, 1)),
-        ]
-    )
-else:
-    transform = transforms.ToTensor()
-
+# create data loaders
+transform = compose_transforms(aug_rot, aug_min_with, aug_erase)
 training_data = datasets.MNIST(root="", train=True, download=True, transform=transform)
-
-test_data = datasets.MNIST(
-    root="", train=False, download=True, transform=transforms.ToTensor()
-)
-
+test_data = datasets.MNIST(root="", train=False, download=True, transform=ToTensor())
 train_loader = DataLoader(training_data, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
 
-for i, (imgs, targets) in enumerate(train_loader):
-    plt.figure(figsize=(10, 10))
-    for j in range(25):
-        plt.subplot(5, 5, j + 1)
-        plt.imshow(imgs[j].squeeze().numpy(), cmap="gray")
-        plt.title(targets[j].item())
-        plt.axis("off")
-    plt.savefig("./figures/augmented.svg", bbox_inches="tight")
-    plt.savefig("./figures/augmented.png", bbox_inches="tight")
-    plt.close()
-    break
-
-model = CapsNet(28, 28, 1, 10).to(device)
+# create model, optimiser, scheduler, criterion
+model = HVCapsNet(*model_args).to(device)
+multi_avg_fn = get_ema_multi_avg_fn(weights_ema_decay)
+model_ema = AveragedModel(model, multi_avg_fn=multi_avg_fn)
 optimiser = torch.optim.Adam(model.parameters(), **adam_params)
 scheduler = torch.optim.lr_scheduler.ExponentialLR(optimiser, lr_decay)
 criterion = torch.nn.CrossEntropyLoss()
+
+
+def save_model(model, file_name):
+    torch.save(
+        model.state_dict(),
+        os.path.join(experiment_path, file_name),
+    )
+
+
+def evaluate(model, loader):
+    model.eval()
+    correct, total, loss = 0, 0, 0
+    for imgs, targets in loader:
+        imgs, targets = imgs.to(device), targets.to(device)
+        with torch.no_grad():
+            output = model(imgs)
+            predicted = output.argmax(dim=-1)
+            total += targets.shape[0]
+            correct += (predicted == targets).sum().item()
+            loss += targets.shape[0] * criterion(output, targets).item()
+    return correct / total, loss / total
+
+
+def update_bn(loader, model):
+    model.train()
+    for imgs, _ in loader:
+        imgs = imgs.to(device)
+        model(imgs)
+
+
 print(
     "number of learnable parameters",
     sum(p.numel() for p in model.parameters() if p.requires_grad),
 )
 
-
-def evaluate(model, loader):
-    model.eval()
-    correct = 0
-    total = 0
-    cum_loss = 0
-    for imgs, targets in loader:
-        imgs, targets = imgs.to(device), targets.to(device)
-        with torch.no_grad():
-            output = model(imgs)
-        predicted = output.argmax(dim=-1)
-        total += targets.shape[0]
-        correct += (predicted == targets).sum().item()
-        cum_loss += targets.shape[0] * criterion(output, targets).item()
-    return correct / total, cum_loss / total
-
-
-torch.save(model.state_dict(), os.path.join(checkpoint_path, "checkpoint0.pth"))
+with open(log_path, "a") as f:
+    f.write(",".join(log_col_names) + "\n")
 for epoch in range(epochs):
     cum_loss = 0
-    cum_norm = 0
+    cum_acc = 0
     for i, (imgs, targets) in enumerate(train_loader):
         model.train()
         imgs, targets = imgs.to(device), targets.to(device)
@@ -101,18 +87,23 @@ for epoch in range(epochs):
         output = model(imgs)
         loss = criterion(output, targets)
         loss.backward()
-        cum_loss += loss.item()
+        cum_acc += (output.argmax(dim=-1) == targets).sum().item()
+        cum_loss += targets.shape[0] * loss.item()
         optimiser.step()
+        model_ema.update_parameters(model)
     scheduler.step()
+
+    update_bn(train_loader, model_ema)
+    train_acc, train_loss = cum_acc / len(training_data), cum_loss / len(training_data)
     test_acc, test_loss = evaluate(model, test_loader)
-    if log_path is not None:
-        with open(log_path, "a") as f:
-            f.write(f"{epoch+1},{cum_loss/len(train_loader)},{test_acc},{test_loss}\n")
-    print(
-        f"Epoch {epoch+1}/{epochs} | avg loss: {cum_loss/len(train_loader):.4f} | test acc: {test_acc:.4f}"
-    )
-    if (epoch + 1) % checkpoint_interval == 0:
-        torch.save(
-            model.state_dict(),
-            os.path.join(checkpoint_path, f"checkpoint{epoch+1}.pth"),
+    test_ema_acc, test_ema_loss = evaluate(model_ema, test_loader)
+    with open(log_path, "a") as f:
+        f.write(
+            f"{epoch+1},{train_acc},{train_loss},{test_acc},{test_loss},{test_ema_acc},{test_ema_loss}\n"
         )
+    print(
+        f"Epoch {epoch+1}/{epochs} | train, test, ema test | acc: {train_acc:.4f}, {test_acc:.4f}, {test_ema_acc:.4f} | loss: {train_loss:.4f}, {test_loss:.4f}, {test_ema_loss:.4f}"
+    )
+
+save_model(model, "model.pth")
+save_model(model_ema, "model_ema.pth")

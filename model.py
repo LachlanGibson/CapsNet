@@ -2,6 +2,48 @@ import torch
 import torch.nn as nn
 
 
+class HVCapsNet(nn.Module):
+    """Reproduction of net architecture from "No Routing Needed Between Capsules"
+    by Adam Byerly, Tatiana Kalganova, Ian Dear
+    https://doi.org/10.48550/arXiv.2001.09136
+    https://github.com/AdamByerly/BMCNNwHFCs
+
+    choices made from original paper:
+    1. Z-Derived Capsules
+    2. Merge branch_logits with sum rather than learnable weights
+    """
+
+    def __init__(self, w, h, c, num_classes, kernel_size=3):
+        super().__init__()
+        self.w, self.h, self.c = w, h, c
+        self.convs = nn.ModuleList(
+            [
+                Conv([c, 32, 48, 64], kernel_size=kernel_size),
+                Conv([64, 80, 96, 112], kernel_size=kernel_size),
+                Conv([112, 128, 144, 160], kernel_size=kernel_size),
+            ]
+        )
+        n_caps = []
+        for b in self.convs:
+            gap = (kernel_size - 1) * len(b.convs)
+            w, h = w - gap, h - gap
+            n_caps.append(w * h)
+        self.caps = nn.ModuleList(
+            [Caps(b.channels[-1], nc, num_classes) for b, nc in zip(self.convs, n_caps)]
+        )
+
+    def forward(self, x):
+        logits = 0
+        for conv, cap in zip(self.convs, self.caps):
+            x = conv(x)
+            logits += cap(x)
+        return logits
+
+    def probabilities(self, x):
+        logits = self.forward(x)
+        return torch.softmax(logits, dim=-1)
+
+
 class Conv(nn.Module):
     def __init__(self, channels, kernel_size=3):
         super().__init__()
@@ -40,14 +82,12 @@ class Caps(nn.Module):
         self.bn = nn.BatchNorm1d(num_channels * num_classes, eps=0.001, momentum=0.0003)
 
     def forward(self, x):
-        # [..., channels, height, width] -> [..., channels, width x height, 1]
-        x = x.flatten(-2).unsqueeze(-1)
-        # [..., channels, capsules, 1] -> [..., channels, capsules, classes]
-        x = self.weights * x
-        # [..., channels, capsules, classes] -> [..., channels, classes]
-        x = x.sum(-2)
-        # [..., channels, classes] -> [..., channels*classes]
-        x = x.flatten(-2)
+        # [..., channels, height, width] -> [..., channels, 1, width x height]
+        x = x.flatten(-2).unsqueeze(-2)
+        # [..., channels, 1, capsules] @ [channels, capsules, classes] -> [..., channels, 1, classes]
+        x = x @ self.weights
+        # [..., channels, 1, classes] -> [..., channels*classes]
+        x = x.flatten(-3)
         # batchnorm channels*classes
         x = self.activation(self.bn(x))
         # [..., channels*classes] -> [..., channels, classes]
@@ -55,44 +95,3 @@ class Caps(nn.Module):
         # [..., channels, classes] -> [..., classes]
         branch_logits = x.sum(-2)
         return branch_logits
-
-
-class CapsNet(nn.Module):
-    """Reproduction of net architecture from "No Routing Needed Between Capsules"
-    by Adam Byerly, Tatiana Kalganova, Ian Dear
-    https://doi.org/10.48550/arXiv.2001.09136
-
-    choices made from original paper:
-    1. Z-Derived Capsules
-    2. Merge branch_logits with sum rather than learnable weights
-    """
-
-    def __init__(self, w, h, c, num_classes, kernel_size=3):
-        super().__init__()
-        self.w, self.h, self.c = w, h, c
-        self.convs = nn.ModuleList(
-            [
-                Conv([c, 32, 48, 64], kernel_size=kernel_size),
-                Conv([64, 80, 96, 112], kernel_size=kernel_size),
-                Conv([112, 128, 144, 160], kernel_size=kernel_size),
-            ]
-        )
-        n_caps = []
-        for c in self.convs:
-            gap = (kernel_size - 1) * len(c.convs)
-            w, h = w - gap, h - gap
-            n_caps.append(w * h)
-        self.caps = nn.ModuleList(
-            [Caps(c.channels[-1], nc, num_classes) for c, nc in zip(self.convs, n_caps)]
-        )
-
-    def forward(self, x):
-        logits = 0
-        for conv, cap in zip(self.convs, self.caps):
-            x = conv(x)
-            logits += cap(x)
-        return logits
-
-    def probabilities(self, x):
-        logits = self.forward(x)
-        return torch.softmax(logits, dim=-1)
